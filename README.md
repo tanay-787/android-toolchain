@@ -1,114 +1,134 @@
-# 🤖 Lean Android Compilation Toolchain for Firebase Studio / IDX
+# 🤖 Android Toolchain (GitHub Actions CI)
 
-A lightweight, zero-overhead Android compilation toolchain designed specifically for cloud workspaces (Project IDX / Firebase Studio). 
-
-It leverages the pre-provisioned Nix/system layer for the Android SDK and OpenJDK 17 without consuming persistent workspace storage, and applies aggressive resource and single-ABI optimization flags adapted from [`tanay-787/refind`](https://github.com/tanay-787/refind).
+A centralized, reusable Android compilation toolchain designed for GitHub Actions. It allows you to build debug APKs across multiple Android, React Native, and Expo repositories from a single shared setup while staying strictly within your monthly GitHub limits (3,000 runner minutes and 2 GB storage).
 
 ---
 
-## 📁 Directory Structure
+## ⚡ Key Optimizations & Quota Protectors
+
+1. **Gradle Caching (Saves Runner Minutes)**:
+   * Powered by `gradle/actions/setup-gradle@v4`.
+   * Leverages GitHub's **free 10 GB per-repository cache pool** (does **not** consume your 2 GB account storage).
+   * Reduces build times from ~6–8 minutes down to ~1.5–2 minutes on warm builds.
+
+2. **Aggressive Retention Cap (Protects 2 GB Storage)**:
+   * Debug artifacts default to `retention-days: 1` (or 2).
+   * Prevents accumulating dozens of 30–80 MB APKs that would quickly exhaust your 2 GB quota.
+
+3. **Lean JVM & Worker Throttling**:
+   * Capped to `-Xmx3072m` JVM and 2 worker threads to match standard GitHub runner specs (2 vCPU, 7 GB RAM).
+   * Eliminates runner out-of-memory errors and Gradle worker thread contention.
+   * Native C++ concurrency capped (`MAKEFLAGS="-j2"`, `CMAKE_BUILD_PARALLEL_LEVEL=2`).
+
+4. **Single-Architecture Compilation (`arm64-v8a`)**:
+   * Automatically sets `reactNativeArchitectures=arm64-v8a` for React Native / Expo / NDK builds.
+   * Eliminates unnecessary x86/x86_64/armeabi-v7a compiling, reducing build times and APK sizes by ~70%.
+
+---
+
+## 🚀 How to Use in Your Repositories
+
+### Option 1: Reusable Workflow (Recommended)
+
+In any calling repository, create `.github/workflows/build-debug.yml`:
+
+```yaml
+name: Build Debug APK
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: tanay-787/android-toolchain/.github/workflows/compile-debug-apk.yml@main
+    with:
+      # Use '.' for pure Android apps, or 'android' for React Native / Expo
+      android-path: '.'
+      java-version: '17'
+      # Keep retention short to protect your 2GB monthly storage quota
+      retention-days: 1
+```
+
+### Option 2: Composite Action (Inside Existing Workflow Job)
+
+If your calling repository already has custom preparatory steps (e.g. `npm install`, asset bundling, linting):
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # ... any custom setup steps (npm install, etc.) ...
+
+      - name: Compile Debug APK
+        uses: tanay-787/android-toolchain@main
+        with:
+          android-path: '.'
+          java-version: '17'
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk-${{ github.run_id }}
+          path: '**/build/outputs/apk/debug/*.apk'
+          retention-days: 1
+```
+
+---
+
+## ⚙️ Configuration Inputs
+
+Both the reusable workflow and composite action support the following inputs:
+
+| Input | Description | Default |
+| :--- | :--- | :--- |
+| `android-path` | Directory containing `gradlew` (`.` for native, `android` for React Native/Expo) | `.` |
+| `java-version` | Java JDK version | `17` |
+| `java-distribution` | JDK vendor distribution (`temurin`, `zulu`, etc.) | `temurin` |
+| `gradle-task` | Gradle task to execute | `assembleDebug` |
+| `optimize-gradle` | Injects lean memory, concurrency & single-ABI flags into `gradle.properties` | `true` |
+| `target-abi` | Architecture target for React Native / Expo builds | `arm64-v8a` |
+| `artifact-name`* | Prefix for the uploaded APK artifact (*reusable workflow only*) | `debug-apk` |
+| `retention-days`* | Days to retain uploaded artifact in storage (*reusable workflow only*) | `1` |
+
+---
+
+## 🔒 Private Repository Access Setup
+
+If this `android-toolchain` repository is private, ensure your other repositories have permission to call it:
+
+1. In this repo, navigate to **Settings** > **Actions** > **General**.
+2. Scroll down to **Access**.
+3. Select **"Accessible from repositories in the 'tanay-787' organization / user account"**.
+4. Click **Save**.
+
+---
+
+## 📁 Repository Structure
 
 ```
 android-toolchain/
-├── bin/                      # SDK and JDK executables linked into PATH
-│   ├── java, javac, jar, ... # OpenJDK 17 binaries (Nix store)
-│   ├── adb, fastboot         # Android platform-tools
-│   ├── sdkmanager            # Writable-root SDK manager wrapper
-│   └── d8, r8, apkanalyzer   # Android cmdline-tools
+├── .github/
+│   └── workflows/
+│       └── compile-debug-apk.yml    # Reusable workflow (workflow_call)
+├── action.yml                       # Composite action (uses: tanay-787/android-toolchain@main)
 ├── config/
-│   └── gradle.properties     # Lean Gradle properties template
+│   └── gradle.properties            # Reference lean Gradle properties
 ├── scripts/
-│   ├── env.sh                # Environment loader (JAVA_HOME, ANDROID_HOME, MAKEFLAGS)
-│   ├── check-env.sh          # Toolchain & resource diagnostics script
-│   ├── build-apk.sh          # Automated lean APK build runner
-│   ├── modify-gradle-props.js# Injects lean flags & local.properties into any repo
-│   ├── serve-apk-qr.js       # Zero-dependency local APK HTTP server with terminal QR code
-│   ├── install-platform.sh   # Helper to install extra Android SDK platforms
-│   └── clean-cache.sh        # Purges Gradle and build caches to reclaim disk
-└── output-apks/              # Central destination for compiled APKs
-```
-
----
-
-## ⚡ Lean Optimizations Included
-
-Adapted from [`tanay-787/refind`](https://github.com/tanay-787/refind):
-
-1. **Gradle JVM Memory Capping**:
-   ```properties
-   org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m -XX:+UseG1GC
-   ```
-   Prevents out-of-memory errors on the workspace's 7.8 GB RAM.
-
-2. **Worker Limitation**:
-   ```properties
-   org.gradle.workers.max=2
-   org.gradle.parallel=false
-   ```
-   Matches the 2 vCPU capacity and avoids thread contention.
-
-3. **C++ / NDK Clang++ Concurrency Caps**:
-   ```bash
-   export MAKEFLAGS="-j2"
-   export CMAKE_BUILD_PARALLEL_LEVEL=2
-   ```
-   Prevents NDK `clang++` `exit code 134` (OOM / `SIGABRT`) when compiling native dependencies.
-
-4. **Single-Architecture Compilation (React Native / Expo)**:
-   ```properties
-   reactNativeArchitectures=arm64-v8a
-   ```
-   Restricts native compilation to modern 64-bit ARM (`arm64-v8a`), cutting build times and disk usage by ~75%.
-
-5. **Filesystem Watcher Disabled**:
-   ```properties
-   org.gradle.vfs.watch=false
-   ```
-   Saves background file descriptor monitoring overhead in container environments.
-
----
-
-## 🚀 Quick Usage
-
-### 1. Build an APK for any Repository
-Run from the root of any Android / React Native / Expo repository:
-```bash
-build-apk
-```
-Or specify path and build type:
-```bash
-build-apk /path/to/my-repo --debug
-build-apk /path/to/my-repo --release
-```
-The compiled APK will automatically be copied to:
-`android-toolchain/output-apks/<repo-name>/`
-
-### 2. Download / Test on Device via QR Code
-Run:
-```bash
-serve-apk
-# Or specify an APK file directly:
-node android-toolchain/scripts/serve-apk-qr.js /path/to/app.apk
-```
-Displays a local download link and an ASCII QR code directly in the terminal to scan and download with your test phone.
-
-### 3. Inject Lean Properties into an Existing Repo
-```bash
-modify-gradle-props /path/to/my-repo
-```
-
-### 4. Install Extra Android SDK Platforms
-```bash
-android-toolchain/scripts/install-platform.sh 33   # Installs platforms;android-33
-android-toolchain/scripts/install-platform.sh 35   # Installs platforms;android-35
-```
-
-### 5. Check Health & Diagnostics
-```bash
-check-android-env
-```
-
-### 6. Clean Caches & Reclaim Storage
-```bash
-clean-android-cache
+│   └── inject-lean-props.js         # Zero-dependency lean property injection script
+└── README.md
 ```

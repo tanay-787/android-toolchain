@@ -1,0 +1,71 @@
+name: Compile Debug APK
+
+on:
+  workflow_call:
+    inputs:
+      android-path:
+        description: 'Directory path containing gradlew (e.g. "." for native Android, "android" for React Native/Expo)'
+        required: false
+        default: '.'
+        type: string
+      java-version:
+        description: 'Java JDK version'
+        required: false
+        default: '17'
+        type: string
+      java-distribution:
+        description: 'Java distribution (temurin, zulu, etc.)'
+        required: false
+        default: 'temurin'
+        type: string
+      gradle-task:
+        description: 'Gradle assemble task to execute'
+        required: false
+        default: 'assembleDebug'
+        type: string
+      artifact-name:
+        description: 'Name prefix for the uploaded debug APK artifact'
+        required: false
+        default: 'debug-apk'
+        type: string
+      retention-days:
+        description: 'Days to retain artifact in storage (keep low to respect 2GB quota)'
+        required: false
+        default: 1
+        type: number
+      optimize-gradle:
+        description: 'Inject lean memory, concurrency & single-ABI flags into gradle.properties'
+        required: false
+        default: true
+        type: boolean
+      target-abi:
+        description: 'Target ABI for React Native/Expo builds (e.g. arm64-v8a)'
+        required: false
+        default: 'arm64-v8a'
+        type: string
+
+jobs:
+  compile:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Build with Android Toolchain
+        uses: tanay-787/android-toolchain@main
+        with:
+          android-path: ${{ inputs.android-path }}
+          java-version: ${{ inputs.java-version }}
+          java-distribution: ${{ inputs.java-distribution }}
+          gradle-task: ${{ inputs.gradle-task }}
+          optimize-gradle: ${{ inputs.optimize-gradle }}
+          target-abi: ${{ inputs.target-abi }}
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}-${{ github.run_id }}
+          path: '${{ inputs.android-path }}/**/build/outputs/apk/debug/*.apk'
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

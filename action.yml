@@ -1,0 +1,70 @@
+name: 'Android Toolchain Compiler'
+description: 'Builds lean Android Debug APK with automated Gradle caching, memory caps, and single-ABI optimization'
+inputs:
+  android-path:
+    description: 'Path containing gradlew or build.gradle (e.g. "." or "android")'
+    required: false
+    default: '.'
+  java-version:
+    description: 'Java JDK version'
+    required: false
+    default: '17'
+  java-distribution:
+    description: 'Java distribution'
+    required: false
+    default: 'temurin'
+  gradle-task:
+    description: 'Gradle assemble task to execute'
+    required: false
+    default: 'assembleDebug'
+  optimize-gradle:
+    description: 'Inject lean flags into gradle.properties'
+    required: false
+    default: 'true'
+  target-abi:
+    description: 'Target ABI for React Native/Expo builds'
+    required: false
+    default: 'arm64-v8a'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up JDK ${{ inputs.java-version }}
+      uses: actions/setup-java@v4
+      with:
+        distribution: ${{ inputs.java-distribution }}
+        java-version: ${{ inputs.java-version }}
+
+    # Automatic Gradle User Home & configuration caching (uses free 10GB Actions cache pool)
+    - name: Setup Gradle Cache
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        build-root-directory: ${{ inputs.android-path }}
+
+    - name: Inject Lean Gradle & NDK Optimizations
+      if: ${{ inputs.optimize-gradle == 'true' }}
+      shell: bash
+      env:
+        REACT_NATIVE_ARCHITECTURES: ${{ inputs.target-abi }}
+      run: |
+        node "${{ github.action_path }}/scripts/inject-lean-props.js" "${{ inputs.android-path }}"
+
+    - name: Grant Execute Permission to Gradle Wrapper
+      shell: bash
+      run: |
+        if [ -f "${{ inputs.android-path }}/gradlew" ]; then
+          chmod +x "${{ inputs.android-path }}/gradlew"
+        fi
+
+    - name: Compile Debug APK
+      shell: bash
+      working-directory: ${{ inputs.android-path }}
+      env:
+        MAKEFLAGS: "-j2"
+        CMAKE_BUILD_PARALLEL_LEVEL: 2
+      run: |
+        if [ -f "./gradlew" ]; then
+          ./gradlew ${{ inputs.gradle-task }} --no-daemon
+        else
+          gradle ${{ inputs.gradle-task }} --no-daemon
+        fi
