@@ -30,16 +30,17 @@ runs:
   using: 'composite'
   steps:
     - name: Set up JDK ${{ inputs.java-version }}
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v5
       with:
         distribution: ${{ inputs.java-distribution }}
         java-version: ${{ inputs.java-version }}
 
     # Automatic Gradle User Home & configuration caching (uses free 10GB Actions cache pool)
+    # cache-read-only: false ensures cache writes succeed on development/feature branches
     - name: Setup Gradle Cache
       uses: gradle/actions/setup-gradle@v4
       with:
-        build-root-directory: ${{ inputs.android-path }}
+        cache-read-only: false
 
     - name: Inject Lean Gradle & NDK Optimizations
       if: ${{ inputs.optimize-gradle == 'true' }}
